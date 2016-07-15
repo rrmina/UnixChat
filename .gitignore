@@ -32,7 +32,7 @@
 *.hex
 
 # Debug files
-*.dSYM/
+*.d
 *.su
 
 # Directories
@@ -48,3 +48,5 @@ MP2
 # Visual Studio Code Files
 .vscode
 
+# Database
+accounts.txt
