@@ -18,7 +18,7 @@ FILE *fd;
 
 int connections = 0, for_logout = 0, for_logout_broadcast = 0;
 
-
+// Handles Ctrl + C calls
 void sig_usr(int signo)
 {
 	printf("\n");
@@ -43,6 +43,37 @@ void *get_in_addr(struct sockaddr *sa)
 	}
 
 	return &(((struct sockaddr_in6*)sa)->sin6_addr);
+}
+
+/*** Sends message to clients ****/
+void send_message(char* message, int socket_max, fd_set master, int listener_socket, int* check_for_login, int sender_socket, int login_error)
+{
+	int temporary_socket_count;
+	for(temporary_socket_count = 0; temporary_socket_count <= socket_max; temporary_socket_count++) {
+		// send to everyone!
+		if (FD_ISSET(temporary_socket_count, &master)) {
+			// except the listener and ourselves
+			if (temporary_socket_count != listener_socket) {
+				if (sender_socket == -2 && login_error == -2) {
+					if (send(temporary_socket_count, message, strlen(message)+1, 0) == -1) {
+						perror("send");
+					}
+				}
+				else if (login_error == -3 && temporary_socket_count != sender_socket && temporary_socket_count != listener_socket) {
+					if (send(temporary_socket_count, message, strlen(message)+1, 0) == -1) {
+						perror("send");
+					}
+				} else {
+					if (temporary_socket_count != sender_socket && check_for_login[temporary_socket_count] == login_error) {
+						if (send(temporary_socket_count, message, strlen(message)+1, 0) == -1) {
+							perror("send");
+						}
+					}
+				}
+			}
+		}
+	}
+	return;
 }
 
 int main(void)
@@ -76,7 +107,7 @@ int main(void)
 	char remoteIP[INET6_ADDRSTRLEN];
 
 	int yes=1;    // for setsockopt() SO_REUSEADDR, below
-	int i, j, rv;
+	int i, j, rv; // socket counts
 	char *hashed = malloc(100);
 	char salt[30] = "$1$vf3r32bs64612$"; // random salt
 	struct addrinfo hints, *ai, *p;
@@ -145,26 +176,16 @@ int main(void)
 
 	// main loop
 	for(;; ) {
-		int temp;
 		if (for_logout_broadcast) {
 			printf("\033[31mServer is shutting down. Waiting for client/s to disconnect.\n\033[0m");
-			for(temp = 0; temp <= fdmax; temp++) {
-				// send to everyone!
-				if (FD_ISSET(temp, &master)) {
-					// except the listener and ourselves
-					if (temp != listener) {
-						char mesg[140];
-						sprintf(mesg, "\033[31m<ADMIN> SERVER IS SHUTTING DOWN, PLEASE LOG OUT NOW TO AVOID LOSS OF DATA.\n\033[0m");
-						if (send(temp, mesg, strlen(mesg)+1, 0) == -1) {
-							perror("send");
-							//printf("%i\n", temp);
-						}
-					}
-				}
-			}
+
+			// Send warning to all connected clients
+			char mesg[140];
+			sprintf(mesg, "\033[31m<ADMIN> SERVER IS SHUTTING DOWN, PLEASE LOG OUT NOW TO AVOID LOSS OF DATA.\n\033[0m");
+			send_message(mesg, fdmax, master, listener, check_for_login, -1, -1);
 		}
 		for_logout_broadcast = 0;
-		//printf("yo\n");
+		
 		read_fds = master; // copy it
 		if (select(fdmax+1, &read_fds, NULL, NULL, NULL) == -1) {
 			//perror("select");
@@ -214,22 +235,9 @@ int main(void)
 									exit(0);
 								}
 							}
-							for(j = 0; j <= fdmax; j++) {
-								// send to everyone!
-								if (FD_ISSET(j, &master)) {
-									// except the listener and ourselves
-									if (j != listener && j != i && check_for_login[j] == 0) {
-
-										sprintf(logout, "<%s> has logged out.\n", user[i]);
-										if (strcmp(user[i], "")!=0) {
-											if (send(j, logout, strlen(logout)+1, 0) == -1) {
-												perror("send");
-											}
-										}
-
-									}
-								}
-							}
+							// Send message to every client
+							sprintf(logout, "<%s> has logged out.\n", user[i]);
+							send_message(logout, fdmax, master, listener, check_for_login, i, 0);
 							strcpy(user[i], "");
 						} else {
 							perror("recv");
@@ -298,20 +306,12 @@ int main(void)
 										if(ref_num == account_num[i]) {
 											check_for_login[i] = 0;
 											send(i, "Admin has given you voice.\n", strlen("Admin has given you voice.\n")+1, 0);
-											printf("<%s> has connected.\n", user[i]);
+											printf("<%s> has connected.\n", user2[i]);
 											strcpy(user[i], user2[i]);
-											for(j = 0; j <= fdmax; j++) {
-												// send to everyone!
-												if (FD_ISSET(j, &master)) {
-													// except the listener and ourselves
-													if (j != listener && j != i && check_for_login[j] == 0) {
-														sprintf(login, "<%s> has logged in.\n", user[i]);
-														if (send(j, login, strlen(login)+1, 0) == -1) {
-															perror("send");
-														}
-													}
-												}
-											}
+
+											// Send to every client except server and the one that just logged in
+											sprintf(login, "<%s> has logged in.\n", user[i]);
+											send_message(login, fdmax, master, listener, check_for_login, i, 0);
 											break;
 										}
 										//send(newfd, "<User> has logged in\n", strlen("<User> has logged in\n"), 0);
@@ -377,13 +377,11 @@ int main(void)
 							int wala=0;
 							char message2[200];
 							sscanf(buf, "%s %s %s", command, person, message);
-							printf("%s %s %s-\n", command, person, message);
+							printf("%s %s %s -\n", command, person, message);
 							if (strcmp("/PM", command)==0) {
 								for(j = 0; j <= fdmax; j++) {
-									printf("%s\n", user[j]);
-									// send to everyone!
 									if (FD_ISSET(j, &master)) {
-										// except the listener and ourselves
+										// Send to the target person
 										if (strcmp(user[j], person) == 0) {
 											sprintf(message2, "[PM]<%s> %s\n", user[i], message);
 											send(j,message2, strlen(message2)+1, 0);
@@ -399,9 +397,8 @@ int main(void)
 							}
 							else if (strcmp("/whosonline", buf)==0) {
 								for(j = 0; j <= fdmax; j++) {
-									// send to everyone!
 									if (FD_ISSET(j, &master)) {
-										// except the listener and ourselves
+										// Send list to the sender
 										if (j != listener && j != i && check_for_login[j] == 0) {
 											printf("%s\n", user[j]);
 											strcat(whosonline, user[j]);
@@ -417,7 +414,7 @@ int main(void)
 									send(i, "You're the only one logged in.\n", strlen("You're the only one logged in.\n") + 1, 0);
 							}
 							else {
-								for(j = 0; j <= fdmax; j++) {
+								/*for(j = 0; j <= fdmax; j++) {
 									// send to everyone!
 									if (FD_ISSET(j, &master)) {
 										// except the listener and ourselves
@@ -429,7 +426,10 @@ int main(void)
 											}
 										}
 									}
-								}
+								}*/
+								char mesg[140];
+								sprintf(mesg, "<%s> %s\n", user[i], buf);
+								send_message(mesg, fdmax, master, listener, check_for_login, i, -3);
 							}
 							fclose(fd);
 						}
