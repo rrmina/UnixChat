@@ -6,7 +6,7 @@ Chat Application for linux written in C
   ```
   make
   ```
-
+Note that this project uses libncurses5-dev library. Makefile installs the library using sudo and therefore, you need to type your password. :)
 ## How to run
 Run the server first
   ```

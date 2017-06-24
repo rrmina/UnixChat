@@ -50,3 +50,6 @@ MP2
 
 # Database
 accounts.txt
+
+# Directories
+/bin
